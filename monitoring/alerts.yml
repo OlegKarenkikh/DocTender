@@ -1,14 +1,15 @@
-# Prometheus Alert Rules for DocTender
-# Version: 1.0.0
-# Purpose: Define alert conditions for DocTender monitoring
+# Alert Rules for DocTender v1.2.0
+# 20+ alerting conditions for production monitoring
 
 groups:
-  - name: doctender-alerts
-    interval: 15s
+  - name: doctender_alerts
+    interval: 30s
     rules:
-      # ===== API AVAILABILITY ALERTS =====
-      
-      - alert: DocTenderAPIDown
+      # =============================================================================
+      # CRITICAL ALERTS (Page on-call)
+      # =============================================================================
+
+      - alert: APIDown
         expr: up{job="doctender-api"} == 0
         for: 2m
         labels:
@@ -16,216 +17,290 @@ groups:
           service: doctender
         annotations:
           summary: "DocTender API is down"
-          description: "DocTender API at {{ $labels.instance }} is not responding"
-          dashboard: "http://localhost:3000/d/doctender-api"
-      
-      - alert: DocTenderHighErrorRate
+          description: "API endpoint at {{ $labels.instance }} is not responding"
+          runbook_url: "https://wiki.example.com/runbook/api-down"
+
+      - alert: DatabaseDown
+        expr: up{job="postgres-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: database
+        annotations:
+          summary: "Database is unavailable"
+          description: "PostgreSQL database is not responding"
+          runbook_url: "https://wiki.example.com/runbook/db-down"
+
+      - alert: RedisDown
+        expr: up{job="redis-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis cache is down"
+          description: "Redis cache is not responding"
+          runbook_url: "https://wiki.example.com/runbook/redis-down"
+
+      - alert: ModelNotReady
+        expr: classifier_model_ready == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: doctender
+        annotations:
+          summary: "Classification model not ready"
+          description: "ML model failed to load or is not operational"
+          runbook_url: "https://wiki.example.com/runbook/model-not-ready"
+
+      # =============================================================================
+      # WARNING ALERTS (Alert and investigate)
+      # =============================================================================
+
+      # API Performance
+      - alert: HighErrorRate
         expr: |
           (
-            sum(rate(http_requests_total{job="doctender-api",status=~"5.."}[5m]))
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
             /
-            sum(rate(http_requests_total{job="doctender-api"}[5m]))
+            sum(rate(http_requests_total[5m]))
           ) > 0.05
         for: 5m
         labels:
           severity: warning
           service: doctender
         annotations:
-          summary: "DocTender API high error rate ({{ $value | humanizePercentage }})"
-          description: "Error rate exceeds 5% for the last 5 minutes"
-      
-      # ===== PERFORMANCE ALERTS =====
-      
-      - alert: DocTenderHighLatency
-        expr: |
-          histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="doctender-api"}[5m]))
-          > 5
+          summary: "High API error rate (>5%)"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.99, http_request_duration_seconds_bucket) > 5
         for: 5m
         labels:
           severity: warning
           service: doctender
         annotations:
-          summary: "DocTender API high latency (p99: {{ $value | humanizeDuration }})"
-          description: "99th percentile response time exceeds 5 seconds"
-      
-      - alert: DocTenderClassificationSlow
-        expr: |
-          histogram_quantile(0.95, rate(classification_duration_seconds_bucket[5m]))
-          > 10
+          summary: "High API latency (p99 > 5s)"
+          description: "95th percentile latency is {{ $value | humanize }}s"
+
+      # Classification Performance
+      - alert: ClassificationSlow
+        expr: histogram_quantile(0.95, classification_duration_seconds_bucket) > 10
         for: 10m
         labels:
           severity: warning
-          service: doctender
+          service: classification
         annotations:
-          summary: "DocTender classification is slow (p95: {{ $value | humanizeDuration }})"
-          description: "95th percentile classification time exceeds 10 seconds"
-      
-      # ===== BATCH PROCESSING ALERTS =====
-      
-      - alert: DocTenderBatchJobFailed
-        expr: |
-          increase(batch_job_failures_total[15m]) > 10
-        for: 5m
-        labels:
-          severity: warning
-          service: doctender
-        annotations:
-          summary: "DocTender batch jobs failing"
-          description: "More than 10 batch jobs failed in the last 15 minutes"
-      
-      - alert: DocTenderBatchQueueBacklog
-        expr: |
-          batch_queue_size > 1000
-        for: 10m
-        labels:
-          severity: warning
-          service: doctender
-        annotations:
-          summary: "DocTender batch queue is backing up"
-          description: "Batch queue size: {{ $value }} items"
-      
-      # ===== RESOURCE ALERTS =====
-      
-      - alert: DocTenderHighMemoryUsage
-        expr: |
-          container_memory_usage_bytes{name="doctender-api"} / container_spec_memory_limit_bytes > 0.85
-        for: 5m
-        labels:
-          severity: warning
-          service: doctender
-        annotations:
-          summary: "DocTender API high memory usage ({{ $value | humanizePercentage }})"
-          description: "Memory usage exceeds 85% of container limit"
-      
-      - alert: DocTenderHighCPUUsage
-        expr: |
-          rate(container_cpu_usage_seconds_total{name="doctender-api"}[5m]) > 0.8
-        for: 10m
-        labels:
-          severity: warning
-          service: doctender
-        annotations:
-          summary: "DocTender API high CPU usage ({{ $value | humanizePercentage }})"
-          description: "CPU usage exceeds 80% for the last 10 minutes"
-      
-      # ===== DATABASE ALERTS =====
-      
-      - alert: DocTenderDatabaseDown
-        expr: |
-          up{job="postgres", instance=~"postgres-primary"} == 0
-        for: 2m
-        labels:
-          severity: critical
-          service: doctender
-        annotations:
-          summary: "DocTender PostgreSQL database is down"
-          description: "Unable to connect to PostgreSQL database"
-      
-      - alert: DocTenderDatabaseHighConnections
-        expr: |
-          pg_stat_activity_count{job="postgres"} > 80
-        for: 5m
-        labels:
-          severity: warning
-          service: doctender
-        annotations:
-          summary: "DocTender database high connection count"
-          description: "Active connections: {{ $value }}"
-      
-      # ===== CACHE ALERTS =====
-      
-      - alert: DocTenderRedisDown
-        expr: |
-          up{job="redis", instance=~"redis-primary"} == 0
-        for: 2m
-        labels:
-          severity: warning
-          service: doctender
-        annotations:
-          summary: "DocTender Redis cache is down"
-          description: "Unable to connect to Redis cache at {{ $labels.instance }}"
-      
-      - alert: DocTenderRedisMissingMemory
-        expr: |
-          redis_memory_used_bytes / redis_memory_max_bytes > 0.9
-        for: 5m
-        labels:
-          severity: warning
-          service: doctender
-        annotations:
-          summary: "DocTender Redis memory usage critical"
-          description: "Redis memory usage: {{ $value | humanizePercentage }}"
-      
-      # ===== MODEL ALERTS =====
-      
-      - alert: DocTenderModelNotReady
-        expr: |
-          classifier_model_ready == 0
-        for: 2m
-        labels:
-          severity: critical
-          service: doctender
-        annotations:
-          summary: "DocTender classification model is not ready"
-          description: "Classification model failed to load or initialize"
-      
-      - alert: DocTenderLowModelAccuracy
-        expr: |
-          classifier_accuracy < 0.85
+          summary: "Classification requests are slow"
+          description: "95th percentile classification time > 10s"
+
+      - alert: LowAccuracy
+        expr: classifier_accuracy < 0.85
         for: 15m
         labels:
           severity: warning
-          service: doctender
+          service: classification
         annotations:
-          summary: "DocTender model accuracy dropped ({{ $value | humanizePercentage }})"
-          description: "Classification accuracy fell below 85% threshold"
-      
-      # ===== PREDICTION ALERTS =====
-      
-      - alert: DocTenderHighLLMHallucination
-        expr: |
-          llm_hallucination_rate > 0.1
+          summary: "Model accuracy dropped below 85%"
+          description: "Current accuracy: {{ $value | humanizePercentage }}"
+
+      - alert: HighHallucination
+        expr: llm_hallucination_rate > 0.1
         for: 5m
         labels:
           severity: warning
-          service: doctender
+          service: llm
         annotations:
-          summary: "DocTender LLM hallucination rate high ({{ $value | humanizePercentage }})"
-          description: "LLM hallucination rate exceeds 10% threshold"
-      
-      - alert: DocTenderLLMRateLimited
-        expr: |
-          increase(llm_rate_limit_errors_total[5m]) > 5
+          summary: "LLM hallucination rate > 10%"
+          description: "Hallucination rate: {{ $value | humanizePercentage }}"
+
+      # Cache Performance
+      - alert: LowCacheHitRate
+        expr: cache_hit_rate < 0.5
         for: 5m
         labels:
           severity: warning
-          service: doctender
+          service: cache
         annotations:
-          summary: "DocTender LLM API rate limited"
-          description: "Hit rate limits on LLM API in the last 5 minutes"
-      
-      # ===== STORAGE ALERTS =====
-      
-      - alert: DocTenderDiskSpaceLow
+          summary: "Cache hit rate below 50%"
+          description: "Current cache hit rate: {{ $value | humanizePercentage }}"
+
+      # Batch Processing
+      - alert: HighBatchJobFailureRate
         expr: |
-          node_filesystem_avail_bytes{device=~"/dev/.*", fstype!~"tmpfs|fuse.lowerfs"} / node_filesystem_size_bytes < 0.1
+          (
+            sum(increase(batch_job_failures_total[10m]))
+            /
+            sum(increase(batch_jobs_completed_total[10m]))
+          ) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+          service: batch
+        annotations:
+          summary: "High batch job failure rate"
+          description: "Failure rate: {{ $value | humanizePercentage }}"
+
+      - alert: LargeBatchQueueBacklog
+        expr: batch_queue_size > 1000
+        for: 10m
+        labels:
+          severity: warning
+          service: batch
+        annotations:
+          summary: "Large batch job queue backlog"
+          description: "{{ $value }} jobs waiting in queue"
+
+      - alert: BatchProcessingRateLow
+        expr: batch_processing_rate < 10
+        for: 10m
+        labels:
+          severity: warning
+          service: batch
+        annotations:
+          summary: "Batch processing rate is low"
+          description: "Processing rate: {{ $value | humanize }} docs/sec"
+
+      # LLM Issues
+      - alert: LLMRateLimited
+        expr: increase(llm_rate_limit_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: llm
+        annotations:
+          summary: "LLM API rate limit exceeded"
+          description: "{{ $value }} rate limit errors in last 5 minutes"
+
+      - alert: LLMTimeouts
+        expr: increase(llm_timeout_errors_total[5m]) > 5
         for: 5m
         labels:
           severity: warning
-          service: doctender
+          service: llm
         annotations:
-          summary: "DocTender disk space low ({{ $value | humanizePercentage }} available)"
-          description: "Less than 10% disk space available on {{ $labels.device }}"
-      
-      # ===== DEPLOYMENT ALERTS =====
-      
-      - alert: DocTenderDeploymentDown
-        expr: |
-          kube_deployment_status_replicas_available{deployment="doctender-api"} < kube_deployment_spec_replicas{deployment="doctender-api"}
+          summary: "LLM API timeouts occurring"
+          description: "{{ $value }} timeout errors in last 5 minutes"
+
+      # Database Issues
+      - alert: HighDatabaseConnections
+        expr: db_active_connections / db_connection_pool_size > 0.8
         for: 5m
         labels:
           severity: warning
+          service: database
+        annotations:
+          summary: "High database connection pool utilization"
+          description: "Pool utilization: {{ $value | humanizePercentage }}"
+
+      # System Resources
+      - alert: HighMemoryUsage
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.15
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Memory usage > 85%"
+          description: "Available memory: {{ $value | humanizePercentage }}"
+
+      - alert: HighCPUUsage
+        expr: |
+          (
+            1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))
+          ) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "CPU usage > 80%"
+          description: "Current CPU usage: {{ $value | humanizePercentage }}"
+
+      - alert: LowDiskSpace
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|fuse\.lxcfs"}
+            /
+            node_filesystem_size_bytes
+          ) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+        annotations:
+          summary: "Disk space < 10%"
+          description: "Available disk space: {{ $value | humanizePercentage }}"
+
+      # Alertmanager Health
+      - alert: AlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: alertmanager
+        annotations:
+          summary: "AlertManager is down"
+          description: "AlertManager is not responding"
+
+      # =============================================================================
+      # INFO/DEBUG ALERTS (Log and monitor)
+      # =============================================================================
+
+      - alert: UnusualClassificationCount
+        expr: |
+          abs(
+            (rate(classification_total[5m]) - avg_over_time(rate(classification_total[5m])[1h:5m])
+            )
+            /
+            avg_over_time(rate(classification_total[5m])[1h:5m])
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: info
+          service: classification
+        annotations:
+          summary: "Unusual classification request volume"
+          description: "Classification rate deviation > 50%"
+
+      - alert: APIStartupDetected
+        expr: api_uptime_seconds < 300
+        for: 1m
+        labels:
+          severity: info
           service: doctender
         annotations:
-          summary: "DocTender deployment replicas unavailable"
-          description: "Available replicas ({{ $value }}) < desired replicas"
+          summary: "API recently started"
+          description: "API has been up for {{ $value | humanizeDuration }}"
+
+# Recording rules for performance optimization
+recording_rules:
+  - name: api_metrics
+    rules:
+      - record: http:requests:1m_rate
+        expr: rate(http_requests_total[1m])
+      - record: http:errors:1m_rate
+        expr: rate(http_requests_total{status=~"5.."}[1m])
+      - record: http:success_rate:1m
+        expr: |
+          (
+            sum(rate(http_requests_total{status!~"5.."}[1m]))
+            /
+            sum(rate(http_requests_total[1m]))
+          ) > 0
+
+  - name: classification_metrics
+    rules:
+      - record: classification:requests:1m_rate
+        expr: rate(classification_total[1m])
+      - record: classification:p95:1m
+        expr: histogram_quantile(0.95, classification_duration_seconds_bucket)
+      - record: classification:p99:1m
+        expr: histogram_quantile(0.99, classification_duration_seconds_bucket)
+
+  - name: batch_metrics
+    rules:
+      - record: batch:jobs:1m_rate
+        expr: rate(batch_jobs_completed_total[1m])
+      - record: batch:failures:1m_rate
+        expr: rate(batch_job_failures_total[1m])
