@@ -1,0 +1,229 @@
+# Docker Compose for DocTender with Full Monitoring Stack
+# Version: 1.2.0
+# 
+# Services:
+# - doctender-api: FastAPI application with metrics
+# - prometheus: Metrics collection and storage
+# - grafana: Visualization dashboard
+# - alertmanager: Alert management
+# - redis: Caching layer
+# - postgres: Results database
+#
+# Usage:
+#   docker-compose -f docker-compose.monitoring.yml up -d
+#   
+#   Grafana: http://localhost:3000 (admin/admin)
+#   Prometheus: http://localhost:9090
+#   API: http://localhost:8000
+#   Docs: http://localhost:8000/api/v1/docs
+#   Metrics: http://localhost:8000/metrics
+
+version: '3.9'
+
+services:
+  # ===== DOCTENDER API WITH METRICS =====
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: doctender-api-v1.2
+    image: doctender:1.2.0
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://doctender:password@postgres:5432/doctender
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=INFO
+      - METRICS_ENABLED=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./documents:/app/documents
+      - ./logs:/app/logs
+    networks:
+      - doctender-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "prometheus=true"
+      - "prometheus_port=8000"
+      - "prometheus_path=/metrics"
+
+  # ===== PROMETHEUS =====
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: doctender-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/rules/doctender-alerts.yml:ro
+      - prometheus-storage:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.retention.time=30d'
+    depends_on:
+      - api
+    networks:
+      - doctender-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===== GRAFANA =====
+  grafana:
+    image: grafana/grafana:latest
+    container_name: doctender-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - doctender-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===== ALERTMANAGER =====
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: doctender-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-storage:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - doctender-network
+    restart: unless-stopped
+
+  # ===== REDIS CACHE =====
+  redis:
+    image: redis:7-alpine
+    container_name: doctender-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-storage:/data
+    command: redis-server --appendonly yes
+    networks:
+      - doctender-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ===== POSTGRESQL DATABASE =====
+  postgres:
+    image: postgres:15-alpine
+    container_name: doctender-postgres
+    environment:
+      POSTGRES_DB: doctender
+      POSTGRES_USER: doctender
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-storage:/var/lib/postgresql/data
+    networks:
+      - doctender-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doctender"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== NODE EXPORTER (System Metrics) =====
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: doctender-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - doctender-network
+    restart: unless-stopped
+
+  # ===== REDIS EXPORTER (Redis Metrics) =====
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: doctender-redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      REDIS_ADDR: redis:6379
+    depends_on:
+      - redis
+    networks:
+      - doctender-network
+    restart: unless-stopped
+
+  # ===== POSTGRES EXPORTER (Database Metrics) =====
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: doctender-postgres-exporter
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://doctender:password@postgres:5432/doctender?sslmode=disable"
+    depends_on:
+      - postgres
+    networks:
+      - doctender-network
+    restart: unless-stopped
+
+volumes:
+  prometheus-storage:
+    driver: local
+  grafana-storage:
+    driver: local
+  alertmanager-storage:
+    driver: local
+  redis-storage:
+    driver: local
+  postgres-storage:
+    driver: local
+
+networks:
+  doctender-network:
+    driver: bridge
+    name: doctender-monitoring-network
