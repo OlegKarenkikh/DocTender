@@ -1,0 +1,231 @@
+# Prometheus Alert Rules for DocTender
+# Version: 1.0.0
+# Purpose: Define alert conditions for DocTender monitoring
+
+groups:
+  - name: doctender-alerts
+    interval: 15s
+    rules:
+      # ===== API AVAILABILITY ALERTS =====
+      
+      - alert: DocTenderAPIDown
+        expr: up{job="doctender-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: doctender
+        annotations:
+          summary: "DocTender API is down"
+          description: "DocTender API at {{ $labels.instance }} is not responding"
+          dashboard: "http://localhost:3000/d/doctender-api"
+      
+      - alert: DocTenderHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="doctender-api",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="doctender-api"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender API high error rate ({{ $value | humanizePercentage }})"
+          description: "Error rate exceeds 5% for the last 5 minutes"
+      
+      # ===== PERFORMANCE ALERTS =====
+      
+      - alert: DocTenderHighLatency
+        expr: |
+          histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="doctender-api"}[5m]))
+          > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender API high latency (p99: {{ $value | humanizeDuration }})"
+          description: "99th percentile response time exceeds 5 seconds"
+      
+      - alert: DocTenderClassificationSlow
+        expr: |
+          histogram_quantile(0.95, rate(classification_duration_seconds_bucket[5m]))
+          > 10
+        for: 10m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender classification is slow (p95: {{ $value | humanizeDuration }})"
+          description: "95th percentile classification time exceeds 10 seconds"
+      
+      # ===== BATCH PROCESSING ALERTS =====
+      
+      - alert: DocTenderBatchJobFailed
+        expr: |
+          increase(batch_job_failures_total[15m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender batch jobs failing"
+          description: "More than 10 batch jobs failed in the last 15 minutes"
+      
+      - alert: DocTenderBatchQueueBacklog
+        expr: |
+          batch_queue_size > 1000
+        for: 10m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender batch queue is backing up"
+          description: "Batch queue size: {{ $value }} items"
+      
+      # ===== RESOURCE ALERTS =====
+      
+      - alert: DocTenderHighMemoryUsage
+        expr: |
+          container_memory_usage_bytes{name="doctender-api"} / container_spec_memory_limit_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender API high memory usage ({{ $value | humanizePercentage }})"
+          description: "Memory usage exceeds 85% of container limit"
+      
+      - alert: DocTenderHighCPUUsage
+        expr: |
+          rate(container_cpu_usage_seconds_total{name="doctender-api"}[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender API high CPU usage ({{ $value | humanizePercentage }})"
+          description: "CPU usage exceeds 80% for the last 10 minutes"
+      
+      # ===== DATABASE ALERTS =====
+      
+      - alert: DocTenderDatabaseDown
+        expr: |
+          up{job="postgres", instance=~"postgres-primary"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: doctender
+        annotations:
+          summary: "DocTender PostgreSQL database is down"
+          description: "Unable to connect to PostgreSQL database"
+      
+      - alert: DocTenderDatabaseHighConnections
+        expr: |
+          pg_stat_activity_count{job="postgres"} > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender database high connection count"
+          description: "Active connections: {{ $value }}"
+      
+      # ===== CACHE ALERTS =====
+      
+      - alert: DocTenderRedisDown
+        expr: |
+          up{job="redis", instance=~"redis-primary"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender Redis cache is down"
+          description: "Unable to connect to Redis cache at {{ $labels.instance }}"
+      
+      - alert: DocTenderRedisMissingMemory
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender Redis memory usage critical"
+          description: "Redis memory usage: {{ $value | humanizePercentage }}"
+      
+      # ===== MODEL ALERTS =====
+      
+      - alert: DocTenderModelNotReady
+        expr: |
+          classifier_model_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: doctender
+        annotations:
+          summary: "DocTender classification model is not ready"
+          description: "Classification model failed to load or initialize"
+      
+      - alert: DocTenderLowModelAccuracy
+        expr: |
+          classifier_accuracy < 0.85
+        for: 15m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender model accuracy dropped ({{ $value | humanizePercentage }})"
+          description: "Classification accuracy fell below 85% threshold"
+      
+      # ===== PREDICTION ALERTS =====
+      
+      - alert: DocTenderHighLLMHallucination
+        expr: |
+          llm_hallucination_rate > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender LLM hallucination rate high ({{ $value | humanizePercentage }})"
+          description: "LLM hallucination rate exceeds 10% threshold"
+      
+      - alert: DocTenderLLMRateLimited
+        expr: |
+          increase(llm_rate_limit_errors_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender LLM API rate limited"
+          description: "Hit rate limits on LLM API in the last 5 minutes"
+      
+      # ===== STORAGE ALERTS =====
+      
+      - alert: DocTenderDiskSpaceLow
+        expr: |
+          node_filesystem_avail_bytes{device=~"/dev/.*", fstype!~"tmpfs|fuse.lowerfs"} / node_filesystem_size_bytes < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender disk space low ({{ $value | humanizePercentage }} available)"
+          description: "Less than 10% disk space available on {{ $labels.device }}"
+      
+      # ===== DEPLOYMENT ALERTS =====
+      
+      - alert: DocTenderDeploymentDown
+        expr: |
+          kube_deployment_status_replicas_available{deployment="doctender-api"} < kube_deployment_spec_replicas{deployment="doctender-api"}
+        for: 5m
+        labels:
+          severity: warning
+          service: doctender
+        annotations:
+          summary: "DocTender deployment replicas unavailable"
+          description: "Available replicas ({{ $value }}) < desired replicas"
