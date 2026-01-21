@@ -1,0 +1,127 @@
+# Prometheus Configuration for DocTender v1.2.0
+# Scrapes metrics from DocTender API and supporting services
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'doctender-monitoring'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load alert rules
+rule_files:
+  - '/etc/prometheus/alerts.yml'
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+
+  # DocTender API (primary)
+  - job_name: 'doctender-api'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ['localhost:8000']
+        labels:
+          instance: 'api-primary'
+          service: 'doctender'
+          env: 'production'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # DocTender API (replica, if available)
+  - job_name: 'doctender-api-replica'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ['localhost:8001']
+        labels:
+          instance: 'api-replica'
+          service: 'doctender'
+          env: 'production'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: '.*'
+        target_label: replica
+        replacement: 'true'
+
+  # Redis Cache
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['localhost:6379']
+        labels:
+          service: 'redis'
+          purpose: 'cache'
+    metric_path: '/metrics'
+    scrape_interval: 30s
+    # Redis exporter runs on port 9121
+  - job_name: 'redis-exporter'
+    static_configs:
+      - targets: ['localhost:9121']
+        labels:
+          service: 'redis'
+          component: 'exporter'
+    scrape_interval: 30s
+
+  # PostgreSQL Database
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['localhost:5432']
+        labels:
+          service: 'postgres'
+          purpose: 'database'
+    scrape_interval: 30s
+    # Postgres exporter runs on port 9187
+  - job_name: 'postgres-exporter'
+    static_configs:
+      - targets: ['localhost:9187']
+        labels:
+          service: 'postgres'
+          component: 'exporter'
+    scrape_interval: 30s
+
+  # System Metrics (Node Exporter)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+        labels:
+          service: 'system'
+          component: 'node-exporter'
+    scrape_interval: 30s
+
+  # Alertmanager self-monitoring
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['localhost:9093']
+        labels:
+          service: 'alertmanager'
+    scrape_interval: 30s
+
+# Remote write configuration (optional, for long-term storage)
+# remote_write:
+#   - url: "http://remote-prometheus:9009/api/v1/write"
+#     queue_config:
+#       capacity: 10000
+#       max_shards: 200
+#       min_shards: 1
+#       max_samples_per_send: 1000
+#       batch_send_wait: 5s
+#       min_backoff: 30ms
+#       max_backoff: 100ms
