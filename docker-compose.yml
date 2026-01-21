@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  # Main API service
+  api:
+    build: .
+    container_name: doctender-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./documents:/app/documents
+      - ./logs:/app/logs
+    networks:
+      - doctender-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # Redis для кеширования (опционально)
+  redis:
+    image: redis:7-alpine
+    container_name: doctender-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - doctender-network
+    restart: unless-stopped
+
+  # PostgreSQL для хранения результатов (опционально)
+  postgres:
+    image: postgres:15-alpine
+    container_name: doctender-db
+    environment:
+      POSTGRES_DB: doctender
+      POSTGRES_USER: doctender
+      POSTGRES_PASSWORD: changeme
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - doctender-network
+    restart: unless-stopped
+
+networks:
+  doctender-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+  postgres_data:
