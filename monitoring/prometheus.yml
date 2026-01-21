@@ -1,0 +1,126 @@
+# Prometheus Configuration for DocTender Monitoring
+# Version: 1.0.0
+# Purpose: Collect and store metrics from DocTender API
+
+global:
+  # How often to scrape targets by default
+  scrape_interval: 15s
+  
+  # How long until a scrape request times out
+  scrape_timeout: 10s
+  
+  # How often to evaluate rules
+  evaluation_interval: 15s
+  
+  # Attach these labels to any time series or alerts
+  external_labels:
+    monitor: 'doctender-monitor'
+    environment: 'production'
+    service: 'doctender-api'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'
+
+# Load rules for generating alerts
+rule_files:
+  - '/etc/prometheus/rules/doctender-alerts.yml'
+  - '/etc/prometheus/rules/doctender-recording.yml'
+
+# Scrape configurations
+scrape_configs:
+  # === DocTender API Metrics ===
+  - job_name: 'doctender-api'
+    
+    # Metrics path defaults to '/metrics'
+    metrics_path: '/metrics'
+    
+    # Scheme defaults to 'http'
+    scheme: 'http'
+    
+    static_configs:
+      - targets: ['localhost:8000']
+        labels:
+          instance: 'api-primary'
+          version: '1.1.0'
+    
+    # Override the global default of 15s
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    
+    # Relabel configurations
+    relabel_configs:
+      - source_labels: [__scheme__, __address__, __metrics_path__]
+        separator: '://'
+        target_label: '__param_target'
+      - source_labels: [__param_target]
+        target_label: 'instance'
+      - target_label: __address__
+        replacement: 'localhost:9090'
+  
+  # === DocTender API Replica (if running HA) ===
+  - job_name: 'doctender-api-replica'
+    metrics_path: '/metrics'
+    scheme: 'http'
+    
+    static_configs:
+      - targets: ['localhost:8001']
+        labels:
+          instance: 'api-replica'
+          version: '1.1.0'
+    
+    scrape_interval: 30s
+    scrape_timeout: 10s
+  
+  # === Redis Metrics (if used) ===
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['localhost:6379']
+        labels:
+          instance: 'redis-primary'
+    
+    scrape_interval: 15s
+    scrape_timeout: 5s
+  
+  # === PostgreSQL Metrics (if used) ===
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['localhost:9187']
+        labels:
+          instance: 'postgres-primary'
+    
+    scrape_interval: 30s
+    scrape_timeout: 10s
+  
+  # === Docker Daemon Metrics ===
+  - job_name: 'docker-daemon'
+    static_configs:
+      - targets: ['localhost:9323']
+        labels:
+          instance: 'docker-host'
+    
+    scrape_interval: 15s
+    scrape_timeout: 10s
+  
+  # === Node Exporter (System Metrics) ===
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+        labels:
+          instance: 'node-primary'
+    
+    scrape_interval: 15s
+    scrape_timeout: 10s
+  
+  # === Prometheus Self-Monitoring ===
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'prometheus-primary'
+    
+    scrape_interval: 15s
+    scrape_timeout: 10s
